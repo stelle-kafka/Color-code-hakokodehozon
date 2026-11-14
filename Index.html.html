@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>単色画像メーカー</title>
+<style>
+:root{--bg:#f3f3f1;--fg:#1d1d1b;--muted:#6b6b66;--line:#d6d6d1;--card:#fff;--accent:#1d1d1b;--accent-fg:#fff;--err:#b3261e;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#171716;--fg:#ececea;--muted:#9a9a94;--line:#3a3a37;--card:#232321;--accent:#ececea;--accent-fg:#171716;--err:#f2b8b5;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#171716;--fg:#ececea;--muted:#9a9a94;--line:#3a3a37;--card:#232321;--accent:#ececea;--accent-fg:#171716;--err:#f2b8b5;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic",system-ui,sans-serif;line-height:1.6}
+main{max-width:480px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.15rem;margin:0 0 16px;font-weight:700}
+#preview{width:100%;aspect-ratio:1/1;border-radius:6px;border:1px solid var(--line);background:#3b82f6;display:block}
+.row{display:flex;gap:10px;margin-top:16px;align-items:stretch}
+.box{background:var(--card);border:1px solid var(--line);border-radius:6px}
+.box:focus-within{outline:2px solid var(--fg);outline-offset:1px}
+.hex{flex:1;display:flex;align-items:center;padding:0 12px}
+.hex span{color:var(--muted);font-size:1.1rem}
+input{font:inherit;color:var(--fg)}
+#code{flex:1;min-width:0;border:0;background:transparent;font-size:1.1rem;padding:12px 4px;letter-spacing:.04em;outline:none;text-transform:uppercase}
+#picker{width:52px;min-height:48px;border:1px solid var(--line);border-radius:6px;background:var(--card);padding:4px;cursor:pointer}
+.tabs{display:flex;gap:6px;margin-top:14px}
+.tabs button{flex:1;padding:9px 0;border:1px solid var(--line);border-radius:6px;background:var(--card);color:var(--fg);font:inherit;font-size:.85rem;cursor:pointer}
+.tabs button[aria-pressed=true]{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.tabs button:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+#fields{display:grid;gap:8px;margin-top:10px}
+#fields label{display:block;font-size:.75rem;color:var(--muted)}
+#fields input{width:100%;margin-top:2px;padding:10px 8px;font-size:1rem}
+#fields input:focus{outline:2px solid var(--fg);outline-offset:1px}
+.msg{min-height:1.5em;margin:8px 0 0;font-size:.85rem;color:var(--muted)}
+.msg.err{color:var(--err)}
+button#save{width:100%;margin-top:14px;padding:14px;border:0;border-radius:6px;background:var(--accent);color:var(--accent-fg);font:inherit;font-weight:700;font-size:1rem;cursor:pointer}
+button#save:disabled{opacity:.4;cursor:not-allowed}
+button#save:focus-visible{outline:2px solid var(--fg);outline-offset:2px}
+#fallback{margin-top:16px;display:none}
+#fallback img{width:100%;border-radius:6px;border:1px solid var(--line)}
+#fallback p{font-size:.85rem;color:var(--muted);margin:6px 0 0}
+</style>
+</head>
+<body>
+<main>
+<h1>単色画像メーカー</h1>
+<canvas id="preview" width="600" height="600" aria-label="選択した色のプレビュー"></canvas>
+
+<div class="row">
+  <div class="box hex"><span>#</span><input id="code" value="3B82F6" maxlength="7" autocomplete="off" spellcheck="false" aria-label="HEXカラーコード"></div>
+  <input id="picker" type="color" value="#3b82f6" aria-label="カラーピッカー">
+</div>
+
+<div class="tabs" id="tabs" role="group" aria-label="色の指定方式">
+  <button data-m="rgb" aria-pressed="true">RGB</button>
+  <button data-m="hsl" aria-pressed="false">HSL</button>
+  <button data-m="hsv" aria-pressed="false">HSV</button>
+  <button data-m="cmyk" aria-pressed="false">CMYK</button>
+</div>
+<div id="fields"></div>
+<p id="msg" class="msg"></p>
+
+<button id="save">PNGを保存</button>
+<div id="fallback"><img id="fbimg" alt="生成された画像"><p>画像を長押しして保存してください。</p></div>
+</main>
+
+<script>
+(function(){
+  var $=function(i){return document.getElementById(i)};
+  var code=$('code'),picker=$('picker'),prev=$('preview'),msg=$('msg'),save=$('save'),
+      fb=$('fallback'),fbimg=$('fbimg'),fieldsEl=$('fields'),tabs=$('tabs');
+  var rgb=[59,130,246],mode='rgb',valid=true,downloads=null;
+
+  var DEFS={
+    rgb:[['R',255],['G',255],['B',255]],
+    hsl:[['H(°)',360],['S(%)',100],['L(%)',100]],
+    hsv:[['H(°)',360],['S(%)',100],['V(%)',100]],
+    cmyk:[['C(%)',100],['M(%)',100],['Y(%)',100],['K(%)',100]]
+  };
+  var R=Math.round;
+
+  function toHsl(c){var r=c[0]/255,g=c[1]/255,b=c[2]/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn,l=(mx+mn)/2,h=0,s=0;
+    if(d){s=d/(1-Math.abs(2*l-1));h=hue(r,g,b,mx,d)}return [R(h),R(s*100),R(l*100)]}
+  function hue(r,g,b,mx,d){var h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;h*=60;return h<0?h+360:h}
+  function fromHsl(v){var h=v[0],s=v[1]/100,l=v[2]/100,c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;return hx(h,c,x,m)}
+  function hx(h,c,x,m){var t=h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]:h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];return t.map(function(u){return R((u+m)*255)})}
+  function toHsv(c){var r=c[0]/255,g=c[1]/255,b=c[2]/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn,h=d?hue(r,g,b,mx,d):0;return [R(h),R(mx?d/mx*100:0),R(mx*100)]}
+  function fromHsv(v){var h=v[0],s=v[1]/100,w=v[2]/100,c=w*s,x=c*(1-Math.abs((h/60)%2-1));return hx(h,c,x,w-c)}
+  function toCmyk(c){var r=c[0]/255,g=c[1]/255,b=c[2]/255,k=1-Math.max(r,g,b);if(k>=1)return [0,0,0,100];
+    return [R((1-r-k)/(1-k)*100),R((1-g-k)/(1-k)*100),R((1-b-k)/(1-k)*100),R(k*100)]}
+  function fromCmyk(v){var k=v[3]/100;return [0,1,2].map(function(i){return R(255*(1-v[i]/100)*(1-k))})}
+  var TO={rgb:function(c){return c.slice()},hsl:toHsl,hsv:toHsv,cmyk:toCmyk};
+  var FROM={rgb:function(v){return v.slice()},hsl:fromHsl,hsv:fromHsv,cmyk:fromCmyk};
+
+  function hexOf(c){return '#'+c.map(function(n){return ('0'+n.toString(16)).slice(-2)}).join('')}
+  function parseHex(v){v=v.trim().replace(/^#/,'');
+    if(/^[0-9a-fA-F]{3}$/.test(v))v=v.split('').map(function(c){return c+c}).join('');
+    if(!/^[0-9a-fA-F]{6}$/.test(v))return null;
+    return [0,2,4].map(function(i){return parseInt(v.substr(i,2),16)})}
+
+  function paint(){var c=prev.getContext('2d');c.fillStyle=hexOf(rgb);c.fillRect(0,0,prev.width,prev.height)}
+  function setValid(ok,text){valid=ok;save.disabled=!ok;msg.textContent=text;msg.className='msg'+(ok?'':' err')}
+
+  function buildFields(){
+    var d=DEFS[mode];fieldsEl.style.gridTemplateColumns='repeat('+d.length+',1fr)';fieldsEl.innerHTML='';
+    d.forEach(function(f,i){
+      var l=document.createElement('label');l.textContent=f[0];
+      var inp=document.createElement('input');inp.type='number';inp.inputMode='decimal';inp.min=0;inp.max=f[1];inp.step=1;
+      inp.addEventListener('input',onField);l.appendChild(inp);fieldsEl.appendChild(l)});
+    syncFields();
+  }
+  function syncFields(skip){
+    var v=TO[mode](rgb);
+    Array.prototype.forEach.call(fieldsEl.querySelectorAll('input'),function(inp,i){if(inp!==skip)inp.value=v[i]});
+  }
+  function apply(c,src){
+    rgb=c;paint();
+    if(src!=='hex')code.value=hexOf(c).slice(1).toUpperCase();
+    if(src!=='picker')picker.value=hexOf(c);
+    if(src!=='field')syncFields();
+    setValid(true,hexOf(c).toUpperCase());
+  }
+
+  code.addEventListener('input',function(){
+    var c=parseHex(code.value);
+    if(c)apply(c,'hex');else setValid(false,'カラーコードが正しくありません(例: 3B82F6 または F80)');
+  });
+  picker.addEventListener('input',function(){apply(parseHex(picker.value),'picker')});
+  function onField(e){
+    var d=DEFS[mode],ins=fieldsEl.querySelectorAll('input'),v=[],ok=true;
+    Array.prototype.forEach.call(ins,function(inp,i){
+      var n=parseFloat(inp.value);
+      if(isNaN(n)||n<0||n>d[i][1])ok=false;else v.push(n)});
+    if(!ok){setValid(false,'各値を '+d.map(function(f){return f[0]+' 0〜'+f[1]}).join(' / ')+' の範囲で入力してください');return}
+    apply(FROM[mode](v).map(function(n){return Math.max(0,Math.min(255,n))}),'field');
+  }
+  tabs.addEventListener('click',function(e){
+    var b=e.target.closest('button');if(!b)return;
+    mode=b.dataset.m;
+    Array.prototype.forEach.call(tabs.children,function(x){x.setAttribute('aria-pressed',x===b)});
+    buildFields();
+    if(!valid)apply(rgb,'init');
+  });
+
+  function makeBlob(size){
+    return new Promise(function(res,rej){
+      var cv=document.createElement('canvas');cv.width=cv.height=size;
+      var c=cv.getContext('2d');c.fillStyle=hexOf(rgb);c.fillRect(0,0,size,size);
+      cv.toBlob(function(b){b?res({blob:b,cv:cv}):rej(new Error('fail'))},'image/png');
+    });
+  }
+  save.addEventListener('click',async function(){
+    if(!valid)return;
+    var size=1024,name='color-'+hexOf(rgb).slice(1)+'-'+size+'.png';
+    try{
+      var out=await makeBlob(size);
+      if(downloads){
+        try{await downloads.save({filename:name,data:out.blob});msg.textContent='保存しました: '+name;msg.className='msg'}
+        catch(e){if(e&&e.code==='declined'){msg.textContent='保存をキャンセルしました'}else{showFallback(out.cv)}}
+      }else{showFallback(out.cv)}
+    }catch(e){msg.textContent='画像を作成できませんでした';msg.className='msg err'}
+  });
+  function showFallback(cv){fbimg.src=cv.toDataURL('image/png');fb.style.display='block'}
+
+  try{if(window.claude&&claude.use){claude.use('downloads').then(function(d){downloads=d}).catch(function(){})}}catch(e){}
+
+  buildFields();apply(rgb,'init');
+})();
+</script>
+</body>
+</html>
